@@ -6,10 +6,14 @@ public class User
     public byte[] IP { get; set; }
     public byte[] Mac { get; set; }
     private Dictionary<byte[], byte[]> ArpTable { get; set; }
-    private List<User> NearUsers { get; set; }
+    public List<User> NearUsers { get; set; }
     private Random rand = new Random();
     private List<User> _priv;
-    private Arp arp;
+    private byte[] Arp { get; set; }
+    private Ethernet LastEthernet { get; set; }
+    private byte[] broadcast = new byte[] { 255, 255, 255, 255, 255, 255 };
+    public static bool Flag = false;
+    
 
     public User(int id)
     {
@@ -22,7 +26,6 @@ public class User
         NearUsers = new List<User>();
         ArpTable.Add(IP, Mac);
         _priv = new List<User>();
-        
     }
 
     public void AddConnect(List<User> c)
@@ -30,94 +33,130 @@ public class User
         c.ForEach(x => NearUsers.Add(x));
     }
 
+    private string ToString(byte[] a)
+    {
+        var o = "";
+        for (var i = 0; i < a.Length-1; i++)
+        {
+            o += a[i] + ":";
+        }
+
+        return o + a[^1];
+    }
+    
     public void CreateArpMeassage(byte[] recIp)
     {
-        var broadcast = new byte[6] {255, 255, 255, 255, 255, 255};
-        arp = new Arp(new byte[] {0, 1}, Mac, IP, broadcast, recIp);
+        Console.WriteLine($"Создан ARP пакет");
+        Arp = new Arp(new byte[] { 0, 1 }, Mac, IP, broadcast, recIp).GetAsByte();
+        LastEthernet = new Ethernet(Arp, broadcast, Mac);
     }
-
-    public void SendArpMessage(byte[] recIp, Arp data)
+    
+    
+    public void SendArpMessage()
     {
-        var broadcast = new byte[6] {255, 255, 255, 255, 255, 255};
-        var ethernet = new Ethernet(data, broadcast, Mac);
-        Ethernet answer = null;
+        var ethernet = new Ethernet(Arp, broadcast, Mac);
         foreach (var user in NearUsers)
         {
+            if (_priv.Contains(user)) continue;
+            if (user.LastEthernet!=null) continue;
             user._priv.Add(this);
-            answer = user.ReceiveMessage(ethernet);
+            foreach (var userUser in _priv) user._priv.Add(userUser);
+            _priv.Add(user);
+            Console.WriteLine($"Пакет запроса отправлен от {ID}:({ToString(Mac)}) к {user.ID}:({ToString(user.Mac)})");
+            user.LastEthernet ??= ethernet;
+            user.ReceiveMessage(ethernet);
+            if (Flag) return;
         }
 
         //ArpTable.Add(recIp, answer.sndAddr);
     }
 
-    public void SendAnswerMessage(Ethernet e)
+    public void SendAnswerMessage()
     {
-        Ethernet answer = null;
+        _priv.Clear();
         foreach (var user in NearUsers)
         {
-            user._priv.Clear();
-            user._priv.Add(this);
-            answer = user.ReceiveMessage(e);
-            ArpTable.TryAdd(answer.GetAddrSnd()[0], answer.sndAddr);
+            if (LastEthernet!=null && Comp(user.Mac, LastEthernet.sndAddr))
+            {
+                var ethernet = new Ethernet(Arp, LastEthernet.GetAddrSnd()[1], Mac);
+                Console.WriteLine($"Пакет ответа отправлен от {ID}:({ToString(Mac)}) к {user.ID}:({ToString(user.Mac)})");
+                var l = user.ArpTable.Count;
+                user.ReceiveMessage(ethernet);
+                if (Flag) return;
+                LastEthernet = null;
+                if (l < user.ArpTable.Count)
+                {
+                    Flag = true;
+                    return;
+                }
+            }
         }
-        //ArpTable.TryAdd(answer.GetAddrSnd()[0], answer.sndAddr);
+        
     }
 
-    public Ethernet ReceiveMessage(Ethernet e)
+    public void ReceiveMessage(Ethernet e)
     {
+        Console.WriteLine($"Пакет принят {ID}:({ToString(Mac)}) от {ToString(e.sndAddr)}");
         //Arp arp = new Arp();
         //byte[] mac = new byte[6] {0, 0, 0, 0, 0, 0};
-        if (e.eq(IP))
+        if (Comp(Mac, e.recAddr))
         {
-            return e;
+            Console.WriteLine($"Найден запрашивающий пользователь {ID}:({ToString(Mac)})");
+            ArpTable.TryAdd(e.GetAddrSnd()[0], e.GetAddrSnd()[1]);
+            return;
         }
+
         if (ArpTableContained(e.GetIp()))
         {
             var mac = GetMacFromArp(e.GetIp());
             var ip = GetIpFromArp(e.GetIp());
-            var arp = new Arp(new byte[] {0, 2}, mac , ip , e.GetAddrSnd()[1], e.GetAddrSnd()[0]);
-            var ethernet = new Ethernet(arp, e.GetAddrSnd()[1], mac);
-            SendAnswerMessage(ethernet);
+            Arp = new Arp(new byte[] { 0, 2 }, mac, ip, e.GetAddrSnd()[1], e.GetAddrSnd()[0]).GetAsByte();
+            LastEthernet = e;
+            //var ethernet = new Ethernet(Arp, e.GetAddrSnd()[1], mac);
+            Console.WriteLine($"Найден искомый пользователь {ToString(ip)}: {ToString(mac)}");
+            SendAnswerMessage();
         }
         else
         {
-            if (e.eq(new byte[] {255, 255, 255, 255, 255, 255}))
+            if (e.eq(new byte[] { 255, 255, 255, 255, 255, 255 }))
             {
-                foreach (var user in NearUsers)
-                {
-                    user._priv.Add(this);
-                    if (!_priv.Contains(user))
-                    {
-                        //var ethernet = new Ethernet(e.data, e.recAddr, Mac);
-                        user.SendArpMessage(e.GetIp());
-                    }
-                }
+                Arp = e.data;
+                Console.WriteLine("Пользователь не найден, продолжаем");
+                SendArpMessage();
             }
-
+            else
+            {
+                Arp = e.data;
+                SendAnswerMessage();
+            }
         }
-        return e;
     }
 
-    public bool comp(byte[] a, byte[] b)
+    public bool Comp(byte[] a, byte[] b)
     {
         return !a.Where((t, i) => t != b[i]).Any();
     }
+
     public byte[] GetMacFromArp(byte[] a)
     {
         foreach (var line in ArpTable)
         {
-            if (comp(line.Key, a)) return line.Value;
+            if (Comp(line.Key, a)) return line.Value;
         }
+
         return null;
     }
+
     public byte[] GetIpFromArp(byte[] a)
     {
         foreach (var line in ArpTable)
         {
-            if (comp(line.Key, a)) return line.Key;
+            if (Comp(line.Key, a)) return line.Key;
         }
+
         return null;
     }
+
     public bool ArpTableContained(byte[] a)
     {
         foreach (var line in ArpTable)
@@ -142,7 +181,13 @@ public class User
         Console.WriteLine($"ARP таблица пошльзователя {ID}");
         foreach (var line in ArpTable)
         {
-            Console.WriteLine($"IP: {line.Key[0]}:{line.Key[1]}:{line.Key[2]}:{line.Key[3]} | MAC {line.Value[0]}:{line.Value[1]}:{line.Value[2]}:{line.Value[3]}:{line.Value[4]}:{line.Value[5]}");
+            Console.WriteLine(
+                $"IP: {line.Key[0]}:{line.Key[1]}:{line.Key[2]}:{line.Key[3]} | MAC {line.Value[0]}:{line.Value[1]}:{line.Value[2]}:{line.Value[3]}:{line.Value[4]}:{line.Value[5]}");
         }
+    }
+
+    public override string ToString()
+    {
+        return ID.ToString();
     }
 }

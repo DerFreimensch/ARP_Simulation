@@ -31,12 +31,23 @@ users.ForEach(x=>x.ShowCurrentArpTable());
 
 Console.WriteLine();
 Console.WriteLine();
-Console.WriteLine();
 
-user8.ShowCurrentArpTable();
+user1.ShowCurrentArpTable();
 user3.ShowCurrentArpTable();
+Console.WriteLine();
+user3.CreateArpMeassage(user1.IP);
+Console.WriteLine();Console.WriteLine();
+user3.SendArpMessage();
+Console.WriteLine();Console.WriteLine();
+user1.ShowCurrentArpTable();
+user3.ShowCurrentArpTable();
+
+Console.WriteLine();
 user3.CreateArpMeassage(user8.IP);
-user3.SendArpMessage(user8.IP, user3.);
+Console.WriteLine();Console.WriteLine();
+user3.SendArpMessage();
+Console.WriteLine();Console.WriteLine();
+user8.ShowCurrentArpTable();
 user3.ShowCurrentArpTable();
 
 
